@@ -78,7 +78,7 @@ PIECE_DATA_BLOCK_WIDTH = PIECE_DATA_WIDTH * NUMBER_OF_PIECES
 
 ; The raster timer counts the number of raster syncs per frame. The higher
 ; this number, the slower the game will run.
-RASTER_TIMER_RESET = $01
+RASTER_TIMER_RESET = $0f
 
 ; When FIRE_LOCKOUT_TIMER is !0 FIRE_ACTIVE can never be set. 
 ; FIRE_LOCKOUT_TIMER_RESET determines how many raster resets after the
@@ -937,7 +937,7 @@ COPY_PIECE_TO_FIELD
   clc
   ldy #$00
   lda (CURRT_PIECE_PTR),Y
--
+  
   cmp #$77
   bcc +
   sec
@@ -963,7 +963,7 @@ COPY_PIECE_TO_FIELD
   clc
   ldy #$01
   lda (CURRT_PIECE_PTR),Y
--
+  
   cmp #$77
   bcc +
   sec
@@ -988,7 +988,7 @@ COPY_PIECE_TO_FIELD
   clc
   ldy #$02
   lda (CURRT_PIECE_PTR),Y
--
+  
   cmp #$77
   bcc +
   sec
@@ -1013,7 +1013,7 @@ COPY_PIECE_TO_FIELD
   clc
   ldy #$03
   lda (CURRT_PIECE_PTR),Y
--
+  
   cmp #$77
   bcc +
   sec
@@ -1037,9 +1037,153 @@ COPY_PIECE_TO_FIELD
   
   rts
   
+;-----------------------------------------------------------------------.
+;                                                      Detect collision |
+;------------------------------------------------------------------------
+; Detects a collision between the current piece (indicated by           |
+; CURRT_PIECE_PTR). There is no indication of where the collision took  |
+; place. If a collision is detected, COLLISION_FLAG is set to true,     |
+; otherwise COLLISION_FLAG will be false.
+;-----------------------------------------------------------------------'
+
+!ZN DETECT_COLLISION
+DETECT_COLLISION
+
+; Calculate the offset of the current piece from the start of the field
+
+  sec
   
+  lda CURRENT_PIECE_LOCATION_X
+  sbc #FIELD_START_X-1
+  sta TEMPX
   
+  lda CURRENT_PIECE_LOCATION_Y
+  sec
+  sbc #FIELD_START_Y-1
   
+  sta FAC1
+  lda #FIELD_DATA_WIDTH
+  sta FAC2
+  jsr MUL8
+  txa
+  clc
+  adc TEMPX
+  
+  adc #<FIELD_DATA ;not needed, aligned
+  sta POINTER1_LO
+  lda #>FIELD_DATA
+  sta POINTER1_HI
+  
+  sec
+  lda POINTER1_LO
+  SBC #11
+  STA POINTER1_LO
+  LDA POINTER1_HI
+  SBC #00
+  STA POINTER1_HI
+  
+  clc
+  ldy #$00
+  lda (CURRT_PIECE_PTR),Y
+  
+  cmp #$77
+  bcc +
+  sec
+  sbc #90
+  jmp ++
++
+  cmp #$50
+  bcc +
+  sec
+  sbc #60
+  jmp ++
++
+  cmp #$27
+  bcc ++
+  sec
+  sbc #30
+++
+  
+  tay
+  lda #$01
+  sta (POINTER1),Y
+  
+  clc
+  ldy #$01
+  lda (CURRT_PIECE_PTR),Y
+  
+  cmp #$77
+  bcc +
+  sec
+  sbc #90
+  jmp ++
++
+  cmp #$50
+  bcc +
+  sec
+  sbc #60
+  jmp ++
++
+  cmp #$27
+  bcc ++
+  sec
+  sbc #30
+++
+  tay
+  lda #$01
+  sta (POINTER1),Y
+  
+  clc
+  ldy #$02
+  lda (CURRT_PIECE_PTR),Y
+  
+  cmp #$77
+  bcc +
+  sec
+  sbc #90
+  jmp ++
++
+  cmp #$50
+  bcc +
+  sec
+  sbc #60
+  jmp ++
++
+  cmp #$27
+  bcc ++
+  sec
+  sbc #30
+++
+  tay
+  lda #$01
+  sta (POINTER1),Y
+  
+  clc
+  ldy #$03
+  lda (CURRT_PIECE_PTR),Y
+  
+  cmp #$77
+  bcc +
+  sec
+  sbc #90
+  jmp ++
++
+  cmp #$50
+  bcc +
+  sec
+  sbc #60
+  jmp ++
++
+  cmp #$27
+  bcc ++
+  sec
+  sbc #30
+++
+  tay
+  lda #$01
+  sta (POINTER1),Y
+  
+  rts
 
 ;***********************************************************************
 ;                                                        CHARACTER DATA
@@ -1142,6 +1286,11 @@ TEMP_HI
 ; Set in UPDATE_PIECE_LOCATION. 1 if the piece is moving this fram, else 0
 MOVING_FLAG
         !BYTE $00
+        
+; Set or unset by DETECT_COLLISION. If true, the current piece/ piece location
+; is colliding with the backgroun data located in FIELD_DATA.
+COLLISION_DETECTED
+  !BYTE $00
 
 ; Cleared at the start of JOY_TEST, then set by JOY_TEST if the fire button
 ; was pressed

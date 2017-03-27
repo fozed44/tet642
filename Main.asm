@@ -97,11 +97,12 @@ INIT
 
         JSR BASIC_OFF
         JSR INITIALIZE_SCREEN_MEMORY
-        JSR SET_EXTENDED_COLOR_MODE
+        ;JSR SET_EXTENDED_COLOR_MODE
         JSR COPY_CUSTOM_CHARS
         JSR COPY_CUSTOM_SCREEN
         
-        JSR SET_COLORS
+        LDA #$07
+        JSR SET_FIELD_COLOR_DATA
 
         LDA #<(PIECE_DATA+PIECE_DATA_WIDTH*6)
         STA CURRT_PIECE_PTR_LO
@@ -120,6 +121,7 @@ INIT
 
         LDA #$01
         STA COLOR
+        STA CURRENT_PIECE_COLOR
         LDA #6
 
 - 
@@ -301,39 +303,25 @@ DRAW_FIELD
 ;                                                     Reset field color
 ;-----------------------------------------------------------------------
 ; A - Color used to fill the field
-; Draws sets the field collor to the color in A
-!ZN RESET_FIELD_COLOR
-RESET_FIELD_COLOR
+; Stores A in each byte for FIELD_COLOR_DATA
+!ZN SET_FIELD_COLOR_DATA
+SET_FIELD_COLOR_DATA
 
         STA TEMPA
 
         CLC
-        LDA #<FIELD_DATA
+        LDA #<FIELD_COLOR_DATA
         STA POINTER1_LO
-        LDA #>FIELD_DATA        ; Get a pointer to the field data into
+        LDA #>FIELD_COLOR_DATA  ; Get a pointer to the field color data into
         STA POINTER1_HI         ; pointer1
         
-        CLC     
-        LDA #<COLOR_MEMORY
-        STA POINTER2_LO
-        LDA #>COLOR_MEMORY     ; Get a pointer to the current screen
-        STA POINTER2_HI        ; buffer into pointer2
-
-        CLC
-        LDA POINTER2_LO
-        ADC #<FIELD_OFFSET
-        STA POINTER2_LO
-        LDA POINTER2_HI         ; pointer 2 now points to
-        ADC #$00                ; the curren screen buffer
-        STA POINTER2_HI         ; plus FILED_OFFSET
-
         LDX #$14                ; Loop 20 lines
 
         LDY #$09                ; loop 10 rows
 .YLOOP2
         
         LDA TEMPA               ; load the color
-        STA (POINTER2),Y        ; store it to the collor memory
+        STA (POINTER1),Y        ; store it to the collor memory
 
         DEY                     ; dec row counter
         CPY #$FF                ; Have we drawn 10 rows?
@@ -341,14 +329,6 @@ RESET_FIELD_COLOR
 
         DEX                     ; dec columns
         BEQ .XDONE2             ; Done with 20? If yes, exit.
-                
-        CLC                     ; Other wise, 
-        LDA POINTER2_LO         ; Add fourty to the collor memory ptr        
-        ADC #$28
-        STA POINTER2_LO
-        LDA POINTER2_HI         
-        ADC #$00
-        STA POINTER2_HI
 
         LDY #$09                ; reset the row counter
         JMP .YLOOP2             ; draw another row
@@ -430,9 +410,6 @@ JOY_TEST
         BIT 4+BITS
         BNE .JOY_EXIT
         INC CURRENT_PIECE_LOCATION_X
-
-
-        
         
 .JOY_EXIT
         RTS
@@ -519,17 +496,22 @@ CLIP_PIECE_LOCATION
 ;-----------------------------------------------------------------------
 !ZN RUN_PIECE_STEP
 RUN_PIECE_STEP
-
-        JSR UPDATE_CURRENT_PIECE
         
+        JSR JOY_TEST
+        jsr UPDATE_CURRENT_PIECE_PTR
+        JSR CLIP_PIECE_LOCATION
+        
+        jsr DETECT_COLLISION
+        ldx #$00
+        lda COLLISION_DETECTED
+        beq +
+        ldx #$01
++       stx $d021
+
         LDA PREV_PIECE_PTR_LO
         LDY PREV_PIECE_PTR_HI
         STA GEN_PIECE_PTR_LO
         STY GEN_PIECE_PTR_HI
-
-
-        JSR JOY_TEST
-        JSR CLIP_PIECE_LOCATION
         
         LDX CURRENT_PIECE_LOCATION_X
         LDY CURRENT_PIECE_LOCATION_Y
@@ -544,12 +526,10 @@ RUN_PIECE_STEP
         ldx #14
 
         LDX #RASTER_TIMER_RESET
-.fr
-        JSR WAIT_FOR_RASTER        
-        DEX
-        BNE .fr
 
-        
+-       JSR WAIT_FOR_RASTER        
+        DEX
+        BNE -
 
         ;LDA MOVING_FLAG
         ;BEQ .NO_COLOR_RESTORE
@@ -557,14 +537,14 @@ RUN_PIECE_STEP
         LDX PREV_PIECE_LOCATION_X
         LDY PREV_PIECE_LOCATION_Y
         JSR RESTORE_PIECE_COLOR
-
+        
 .NO_COLOR_RESTORE        
 
         LDA CURRT_PIECE_PTR_LO
         STA GEN_PIECE_PTR_LO
         LDA CURRT_PIECE_PTR_HI
         STA GEN_PIECE_PTR_HI
-
+        
         LDA #02
         LDX CURRENT_PIECE_LOCATION_X
         LDY CURRENT_PIECE_LOCATION_Y
@@ -610,13 +590,14 @@ SET_MOVING_FLAG
 ; Check FIRE_ACTIVE, if the flag is set, CURRT_PIECE_PTR is adjusted to |
 ; point to the next rotation of the piece.                              |
 ;-----------------------------------------------------------------------'
-!ZN UPDATE_CURRENT_PIECE
-UPDATE_CURRENT_PIECE
+!ZN UPDATE_CURRENT_PIECE_PTR
+UPDATE_CURRENT_PIECE_PTR
 
         LDA FIRE_ACTIVE
         BEQ .END_UPDATE
         
-        jsr COPY_PIECE_TO_FIELD
+        Jsr COPY_PIECE_TO_FIELD
+        jsr COPY_CURRENT_PIECE_COLOR_TO_COLOR_MEMORY
         
         
         CLC
@@ -777,14 +758,14 @@ STORE_PIECE_COLOR
 
 ; Multiply y location of the piece by the screen width (40)
         STY FAC1        ; Y is the multiplicand
-        LDA #40
+        LDA #10
         STA FAC2        ; A -> Offset hi
         JSR MUL8        ; x -> Offset lo
         
 ; Store the y location offset in POINTER1
         clc
-        STX POINTER1_LO       ; lo byte wont change when adding SCREEN1_COLOR
-        ADC #>SCREEN1_COLOR   ; because it is page aligned
+        STX POINTER1_LO       ; lo byte wont change when adding FIELD_COLOR_DATA
+        ADC #>FIELD_COLOR_DATA; because it is page aligned
         STA POINTER1_HI       ; OFFSET_HI -> Y Offset in screen memory
         
 ; Get the color behind the first piece part (pointer1[0],(X - GEN_PIECE_PTR[0]))
@@ -792,14 +773,16 @@ STORE_PIECE_COLOR
         LDA TEMPX               ; Load X offset
         LDY #$00
         ADC (GEN_PIECE_PTR),Y   ; Subtract GEN_PIECE_PR[0]
+        JSR CVTY4010
         TAY                     ; Set as index
-        LDA (POINTER1_LO),Y     ; get color
+        LDA (POINTER1),Y        ; get color
         STA STORED_COLOR        ; Store it in pos1 of color data
 
 ; Get the color behind the second piece part (pointer1[0],(X - GEN_PIECE_PTR[1]))        
         LDA TEMPX               ; Load X offset.
         LDY #$01
         ADC (GEN_PIECE_PTR),Y   ; subtract GEN_PIECE_PR[1]
+        JSR CVTY4010
         TAY                     ; Set as index
         LDA (POINTER1_LO),Y     ; get color
         STA STORED_COLOR+1      ; Store it in pos1 of color data
@@ -808,6 +791,7 @@ STORE_PIECE_COLOR
         CLC
         LDY #$02
         LDA (GEN_PIECE_PTR),Y   ; get GEN_PIECE_PR[2]
+        JSR CVTY4010
         ADC TEMPX               ; add X
         TAY                     ; Set as index
         LDA (POINTER1_LO),Y     ; get color 
@@ -816,9 +800,10 @@ STORE_PIECE_COLOR
 ; Get the colore behind the fourth piece (pointer1[0],(GEN_PIECE_PTR[3] + X))
         LDY #$03
         LDA (GEN_PIECE_PTR),Y   ; get GEN_PIECE_PR[3]
+        JSR CVTY4010
         ADC TEMPX               ; add X
         TAY                     ; Set as index
-        LDA (POINTER1_LO),Y     ; get color    
+        LDA (POINTER1_LO),Y     ; get color
         STA STORED_COLOR+3      ; Store it in pos3 of color data
         
         RTS
@@ -849,7 +834,7 @@ RESTORE_PIECE_COLOR
 ; Store the y location offset in POINTER1
         clc
         STX POINTER1_LO       ; lo byte wont change when adding $D800
-        ADC #>COLOR_MEMORY    ; because it is page aligned
+        ADC #>FIELD_COLOR_DATA; because it is page aligned
         STA POINTER1_HI       ; OFFSET_HI -> Y Offset in screen memory
         
 ; Replace the color behind the first piece part 
@@ -858,6 +843,7 @@ RESTORE_PIECE_COLOR
         LDA TEMPX               ; Load x offset
         LDY #$00
         ADC (GEN_PIECE_PTR),Y   ; Subtract GEN_PIECE_PR[0]
+        JSR CVTY4010
         TAY                     ; Set as index
         LDA STORED_COLOR       ; Get the color in pos1 of the color data
         STA (POINTER1_LO),Y     ; Set the color
@@ -867,6 +853,7 @@ RESTORE_PIECE_COLOR
         LDA TEMPX               ; Load X offset
         LDY #$01
         ADC (GEN_PIECE_PTR),Y   ; Subtract GEN_PIECE_PR[0]
+        JSR CVTY4010
         TAY                     ; Set as index
         LDA STORED_COLOR+1      ; Get the color in pos1 of the color data
         STA (POINTER1_LO),Y     ; Set the color
@@ -877,6 +864,7 @@ RESTORE_PIECE_COLOR
         LDY #$02
         LDA (GEN_PIECE_PTR),Y   ; get GEN_PIECE_PR[1]
         ADC TEMPX               ; add X
+        JSR CVTY4010
         TAY                     ; Set as index
         LDA STORED_COLOR+2      ; get pos2 of color data
         STA (POINTER1_LO),Y     ; Set color
@@ -886,16 +874,105 @@ RESTORE_PIECE_COLOR
         LDY #$03
         LDA (GEN_PIECE_PTR),Y   ; get GEN_PIECE_PR[0]
         ADC TEMPX               ; add X
+        JSR CVTY4010
         TAY                     ; Set as index
         LDA STORED_COLOR+3      ; Get pos3 of color data
         STA (POINTER1_LO),Y     ; Set color
         
         RTS
+
+;-----------------------------------------------------------------------.
+;                                     Generate the color of a new piece |
+;------------------------------------------------------------------------
+; Get a random number between 1 and 15 (exclude $00 and $0B, the piece  |
+; border color and the background. Store THE new color in               |
+; CURRENT_PIECE_COLOR.                                                  |
+;-----------------------------------------------------------------------'
+
+!ZN GEN_NEW_PIECE_COLOR
+GEN_NEW_PIECE_COLOR
+
+; Set the max val and the mask
+
+- lda #$0F    ; max val
+  ldx #$0F    ; Mask
+  
+  jsr RND     ; RND sub routine
+  cmp $00
+  beq -       ; Re-roll if black
+  cmp $0B
+  beq -       ; Re-roll if grey (background color)
+  
+  sta CURRENT_PIECE_COLOR
+  rts
         
 ;-----------------------------------------------------------------------.
-;                                      Copy current piece to field data |
+;                      Copy the color of the current piece to color mem |
 ;------------------------------------------------------------------------
-; Copies the piece data pointed to by CURRT_PIECE_PTR to FIELD_DATA     |
+; Copy the color of the current piece to color memory.                  |
+; CURRENT_PIECE_PTR should hold the address of the piece shape to be    |
+; used to store the color.                                              |
+;-----------------------------------------------------------------------'
+
+!zn COPY_CURRENT_PIECE_COLOR_TO_COLOR_MEMORY
+COPY_CURRENT_PIECE_COLOR_TO_COLOR_MEMORY
+
+; Multiply CURRENT_PIECE_LOCATION_Y by 40 to get the Y offset in screen
+; space
+
+  lda CURRENT_PIECE_LOCATION_Y
+  sta FAC1
+  lda #$28
+  sta FAC2
+  jsr MUL8
+  
+  sta POINTER1_HI
+  
+; Add the x offset
+  clc
+  txa
+  adc CURRENT_PIECE_LOCATION_X
+  sta POINTER1_LO
+  lda POINTER1_HI
+  adc #$d8
+  sta POINTER1_HI
+  
+; Get the relative offset of the first piece part
+  ldy #$00
+  lda (CURRT_PIECE_PTR),y
+  tay
+  lda CURRENT_PIECE_COLOR
+  sta (POINTER1),y
+  tax                     ; Store CURRENT_PIECE_COLOR for fast access
+  
+; Get the relative offset of the second piece part
+  ldy #$01
+  lda (CURRT_PIECE_PTR),y
+  tay
+  txa
+  sta (POINTER1),y
+  
+; Get the relative offset of the third piece part
+  ldy #$02
+  lda (CURRT_PIECE_PTR),y
+  tay
+  txa
+  sta (POINTER1),y
+  
+; Get the relative offset of the fourth piece part
+  ldy #$03
+  lda (CURRT_PIECE_PTR),y
+  tay
+  txa
+  sta (POINTER1),y
+  
+  rts
+  
+        
+;-----------------------------------------------------------------------.
+;                                     Copy current piece to field data. |
+;------------------------------------------------------------------------
+; Copies the piece data pointed to by CURRT_PIECE_PTR to FIELD_DATA.    |
 ;-----------------------------------------------------------------------'
 
 !ZN COPY_PIECE_TO_FIELD
@@ -938,49 +1015,14 @@ COPY_PIECE_TO_FIELD
   ldy #$00
   lda (CURRT_PIECE_PTR),Y
   
-  cmp #$77
-  bcc +
-  sec
-  sbc #90
-  jmp ++
-+
-  cmp #$50
-  bcc +
-  sec
-  sbc #60
-  jmp ++
-+
-  cmp #$27
-  bcc ++
-  sec
-  sbc #30
-++
+  jsr CVTY4010
   
   tay
   lda #$01
   sta (POINTER1),Y
   
-  clc
-  ldy #$01
-  lda (CURRT_PIECE_PTR),Y
+  jsr CVTY4010
   
-  cmp #$77
-  bcc +
-  sec
-  sbc #90
-  jmp ++
-+
-  cmp #$50
-  bcc +
-  sec
-  sbc #60
-  jmp ++
-+
-  cmp #$27
-  bcc ++
-  sec
-  sbc #30
-++
   tay
   lda #$01
   sta (POINTER1),Y
@@ -989,48 +1031,13 @@ COPY_PIECE_TO_FIELD
   ldy #$02
   lda (CURRT_PIECE_PTR),Y
   
-  cmp #$77
-  bcc +
-  sec
-  sbc #90
-  jmp ++
-+
-  cmp #$50
-  bcc +
-  sec
-  sbc #60
-  jmp ++
-+
-  cmp #$27
-  bcc ++
-  sec
-  sbc #30
-++
+  jsr CVTY4010
+  
   tay
   lda #$01
   sta (POINTER1),Y
   
-  clc
-  ldy #$03
-  lda (CURRT_PIECE_PTR),Y
-  
-  cmp #$77
-  bcc +
-  sec
-  sbc #90
-  jmp ++
-+
-  cmp #$50
-  bcc +
-  sec
-  sbc #60
-  jmp ++
-+
-  cmp #$27
-  bcc ++
-  sec
-  sbc #30
-++
+  jsr CVTY4010
   tay
   lda #$01
   sta (POINTER1),Y
@@ -1042,12 +1049,16 @@ COPY_PIECE_TO_FIELD
 ;------------------------------------------------------------------------
 ; Detects a collision between the current piece (indicated by           |
 ; CURRT_PIECE_PTR). There is no indication of where the collision took  |
-; place. If a collision is detected, COLLISION_FLAG is set to true,     |
-; otherwise COLLISION_FLAG will be false.
+; place. If a collision is detected, COLLISION_DETECTED is set to true, |
+; otherwise COLLISION_FLAG will be false.                               |
 ;-----------------------------------------------------------------------'
 
 !ZN DETECT_COLLISION
 DETECT_COLLISION
+
+; Reset COLLISION_DETECTED
+  lda #$00
+  sta COLLISION_DETECTED
 
 ; Calculate the offset of the current piece from the start of the field
 
@@ -1086,104 +1097,89 @@ DETECT_COLLISION
   ldy #$00
   lda (CURRT_PIECE_PTR),Y
   
-  cmp #$77
-  bcc +
-  sec
-  sbc #90
-  jmp ++
-+
-  cmp #$50
-  bcc +
-  sec
-  sbc #60
-  jmp ++
-+
-  cmp #$27
-  bcc ++
-  sec
-  sbc #30
-++
+  jsr CVTY4010
   
   tay
-  lda #$01
-  sta (POINTER1),Y
+  lda (POINTER1),Y
+  
+  beq +
+  inc COLLISION_DETECTED
+  rts
++
   
   clc
   ldy #$01
   lda (CURRT_PIECE_PTR),Y
   
-  cmp #$77
-  bcc +
-  sec
-  sbc #90
-  jmp ++
-+
-  cmp #$50
-  bcc +
-  sec
-  sbc #60
-  jmp ++
-+
-  cmp #$27
-  bcc ++
-  sec
-  sbc #30
-++
+  jsr CVTY4010
+  
   tay
-  lda #$01
-  sta (POINTER1),Y
+  lda (POINTER1),Y
+  
+  beq +
+  inc COLLISION_DETECTED
+  rts
++
   
   clc
   ldy #$02
   lda (CURRT_PIECE_PTR),Y
   
-  cmp #$77
-  bcc +
-  sec
-  sbc #90
-  jmp ++
-+
-  cmp #$50
-  bcc +
-  sec
-  sbc #60
-  jmp ++
-+
-  cmp #$27
-  bcc ++
-  sec
-  sbc #30
-++
+  jsr CVTY4010
+  
   tay
-  lda #$01
-  sta (POINTER1),Y
+  lda (POINTER1),Y
+  
+  beq +
+  inc COLLISION_DETECTED
+  rts
++
   
   clc
   ldy #$03
   lda (CURRT_PIECE_PTR),Y
   
+  jsr CVTY4010
+  
+  tay
+  lda (POINTER1),Y
+  
+  beq +
+  inc COLLISION_DETECTED
+  rts
++
+  
+  rts
+  
+;-----------------------------------------------------------------------.
+;                    Convert a fourty byte Y offset to a 10 by y offset |
+;------------------------------------------------------------------------
+; Converts a 40 byte Y offset (a y offset in screen space) to a 10 byte |
+; y offset (a Y offset in field space)                                  |
+;-----------------------------------------------------------------------'
+; A - The byte to be converted.
+
+!zn CVTY4010
+CVTY4010
+  
   cmp #$77
   bcc +
   sec
   sbc #90
   jmp ++
-+
-  cmp #$50
+  
++ cmp #$50
   bcc +
   sec
   sbc #60
   jmp ++
-+
-  cmp #$27
+  
++ cmp #$27
   bcc ++
   sec
   sbc #30
-++
-  tay
-  lda #$01
-  sta (POINTER1),Y
   
-  rts
+++ rts
 
 ;***********************************************************************
 ;                                                        CHARACTER DATA
@@ -1273,6 +1269,10 @@ STORED_COLOR
 ; One byte of color data used to pass a color between routines
 COLOR
         !BYTE $00
+        
+; Stores the color of the current piece.
+CURRENT_PIECE_COLOR
+        !BYTE $01
 
 ; Used to pass character codes to sub routines.
 CHARACTER_CODE
@@ -1309,31 +1309,31 @@ FIRE_LOCKOUT_TIMER !BYTE $00
 ;-----------------------------------------------------------------------
 !ALIGN 255,0
 SCREEN1
-        !BYTE    $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-        !BYTE    $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-        !BYTE    $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$06,$08,$08,$08,$08,$08,$08,$08,$08,$08,$08,$05,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-        !BYTE    $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$40,$40,$40,$40,$40,$40,$40,$40,$0D,$08,$08,$08,$08,$05,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-        !BYTE    $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$40,$40,$40,$40,$40,$40,$40,$40,$0C,$40,$40,$40,$40,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-        !BYTE    $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$40,$40,$40,$40,$40,$40,$40,$40,$0C,$40,$40,$40,$40,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-        !BYTE    $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$40,$40,$40,$40,$40,$40,$40,$40,$0C,$40,$40,$40,$40,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-        !BYTE    $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$40,$40,$40,$40,$40,$40,$40,$40,$0C,$40,$40,$40,$40,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-        !BYTE    $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$40,$40,$40,$40,$40,$40,$40,$40,$0E,$0A,$0A,$0A,$0A,$07,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-        !BYTE    $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$40,$40,$40,$40,$40,$40,$40,$40,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-        !BYTE    $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$40,$40,$40,$40,$40,$40,$40,$40,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-        !BYTE    $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$40,$40,$40,$40,$40,$40,$40,$40,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-        !BYTE    $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$40,$40,$40,$40,$40,$40,$40,$40,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-        !BYTE    $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$40,$40,$40,$40,$40,$40,$40,$40,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-        !BYTE    $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$40,$40,$40,$40,$40,$40,$40,$40,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-        !BYTE    $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$40,$40,$40,$40,$40,$40,$40,$40,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-        !BYTE    $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$40,$40,$40,$40,$40,$40,$40,$40,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-        !BYTE    $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$40,$40,$40,$40,$40,$40,$40,$40,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-        !BYTE    $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$40,$40,$40,$40,$40,$40,$40,$40,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-        !BYTE    $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$40,$40,$40,$40,$40,$40,$40,$40,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-        !BYTE    $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$40,$40,$40,$40,$40,$40,$40,$40,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-        !BYTE    $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$40,$40,$40,$40,$40,$40,$40,$40,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-        !BYTE    $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$40,$40,$40,$40,$40,$40,$40,$40,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-        !BYTE    $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$04,$0A,$0A,$0A,$0A,$0A,$0A,$0A,$0A,$0A,$0A,$07,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-        !BYTE    $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
+  !BYTE  $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
+  !BYTE  $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
+  !BYTE  $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$06,$08,$08,$08,$08,$08,$08,$08,$08,$08,$08,$05,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
+  !BYTE  $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$0D,$08,$08,$08,$08,$05,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
+  !BYTE  $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$0C,$00,$00,$00,$00,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
+  !BYTE  $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$0C,$00,$00,$00,$00,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
+  !BYTE  $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$0C,$00,$00,$00,$00,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
+  !BYTE  $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$0C,$00,$00,$00,$00,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
+  !BYTE  $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$0E,$0A,$0A,$0A,$0A,$07,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
+  !BYTE  $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
+  !BYTE  $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
+  !BYTE  $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
+  !BYTE  $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
+  !BYTE  $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
+  !BYTE  $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
+  !BYTE  $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
+  !BYTE  $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
+  !BYTE  $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
+  !BYTE  $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
+  !BYTE  $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
+  !BYTE  $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
+  !BYTE  $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
+  !BYTE  $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$09,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$0B,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
+  !BYTE  $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$04,$0A,$0A,$0A,$0A,$0A,$0A,$0A,$0A,$0A,$0A,$07,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
+  !BYTE  $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
 
 !ALIGN 255,0
 SCREEN1_COLOR
@@ -1365,6 +1365,32 @@ SCREEN1_COLOR
 
 !ALIGN 255,0
 FIELD_DATA
+        !BYTE    $00,$00,$00,$00,$00, $00,$05,$00,$00,$00
+        !BYTE    $00,$00,$00,$00,$00, $00,$05,$00,$00,$00
+        !BYTE    $00,$00,$00,$00,$00, $00,$05,$00,$00,$00
+        !BYTE    $00,$00,$00,$00,$00, $00,$05,$00,$00,$00
+        !BYTE    $00,$00,$00,$00,$00, $00,$05,$00,$00,$00
+
+        !BYTE    $00,$00,$00,$00,$00, $00,$05,$00,$00,$00
+        !BYTE    $00,$00,$00,$00,$00, $00,$05,$00,$00,$00
+        !BYTE    $00,$00,$00,$00,$00, $00,$05,$00,$00,$00
+        !BYTE    $00,$00,$00,$00,$00, $00,$05,$00,$00,$00
+        !BYTE    $00,$00,$00,$00,$00, $00,$05,$00,$00,$00
+
+        !BYTE    $00,$00,$00,$00,$00, $00,$05,$00,$00,$00
+        !BYTE    $00,$00,$00,$00,$00, $00,$05,$00,$00,$00
+        !BYTE    $00,$00,$00,$00,$00, $00,$05,$00,$00,$00
+        !BYTE    $00,$00,$00,$00,$00, $00,$05,$00,$00,$00
+        !BYTE    $00,$00,$00,$00,$00, $00,$05,$00,$00,$00
+
+        !BYTE    $00,$00,$00,$00,$00, $00,$05,$00,$00,$00
+        !BYTE    $00,$00,$00,$00,$00, $00,$05,$00,$00,$00
+        !BYTE    $00,$00,$00,$00,$00, $00,$05,$00,$00,$00
+        !BYTE    $00,$00,$00,$00,$00, $00,$05,$00,$00,$00
+        !BYTE    $00,$00,$00,$00,$00, $00,$05,$00,$00,$00
+        
+!ALIGN 255,0
+FIELD_COLOR_DATA
         !BYTE    $00,$00,$00,$00,$00, $00,$05,$00,$00,$00
         !BYTE    $00,$00,$00,$00,$00, $00,$05,$00,$00,$00
         !BYTE    $00,$00,$00,$00,$00, $00,$05,$00,$00,$00

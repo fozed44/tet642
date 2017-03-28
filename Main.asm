@@ -101,7 +101,7 @@ INIT
         JSR COPY_CUSTOM_CHARS
         JSR COPY_CUSTOM_SCREEN
         
-        LDA #$07
+        LDA #$0a
         JSR SET_FIELD_COLOR_DATA
 
         LDA #<(PIECE_DATA+PIECE_DATA_WIDTH*6)
@@ -115,7 +115,7 @@ INIT
         STA PREV_PIECE_PTR_HI
 
         LDA $40
-        JSR RESET_FIELD_DATA
+        JSR SET_FIELD_DATA
         JSR DRAW_FIELD
         JSR FLIP_SCREEN_BUFFERS
 
@@ -300,50 +300,35 @@ DRAW_FIELD
         RTS
 
 ;-----------------------------------------------------------------------
-;                                                     Reset field color
+;                                                       set field color
 ;-----------------------------------------------------------------------
 ; A - Color used to fill the field
 ; Stores A in each byte for FIELD_COLOR_DATA
 !ZN SET_FIELD_COLOR_DATA
 SET_FIELD_COLOR_DATA
 
-        STA TEMPA
-
-        CLC
-        LDA #<FIELD_COLOR_DATA
-        STA POINTER1_LO
-        LDA #>FIELD_COLOR_DATA  ; Get a pointer to the field color data into
-        STA POINTER1_HI         ; pointer1
+  ldy #<FIELD_COLOR_DATA
+  sty POINTER1_LO
+  ldy #>FIELD_COLOR_DATA  ; Get a pointer to the field color data into
+  sty POINTER1_HI         ; pointer1
+  
+  ldy #199                ; Loop 199 chars
         
-        LDX #$14                ; Loop 20 lines
-
-        LDY #$09                ; loop 10 rows
-.YLOOP2
-        
-        LDA TEMPA               ; load the color
-        STA (POINTER1),Y        ; store it to the collor memory
-
-        DEY                     ; dec row counter
-        CPY #$FF                ; Have we drawn 10 rows?
-        BNE .YLOOP2             ; no? Draw another row.
-
-        DEX                     ; dec columns
-        BEQ .XDONE2             ; Done with 20? If yes, exit.
-
-        LDY #$09                ; reset the row counter
-        JMP .YLOOP2             ; draw another row
-
-.XDONE2    
-        RTS
+- sta (POINTER1),y        ; Stor color byte
+  dey                     
+  bne -                   ; Copy from 199 - 1, break at 0
+  
+  sta (POINTER1),y        ; Copy the last byte (index 0)
+  rts                     ; exit
 
 ;-----------------------------------------------------------------------
-;                                                      Reset field data
+;                                                       Set field data
 ;-----------------------------------------------------------------------
 ; A - The character to fill the field data with
 
 ; Set the entire field data fuffer to the same character, (the one in A)
-!ZN RESET_FIELD_DATA
-RESET_FIELD_DATA
+!ZN SET_FIELD_DATA
+SET_FIELD_DATA
 
         LDY #<FIELD_DATA
         STY POINTER1_LO
@@ -513,9 +498,9 @@ RUN_PIECE_STEP
         STA GEN_PIECE_PTR_LO
         STY GEN_PIECE_PTR_HI
         
-        LDX CURRENT_PIECE_LOCATION_X
-        LDY CURRENT_PIECE_LOCATION_Y
-        JSR STORE_PIECE_COLOR
+        ;LDX CURRENT_PIECE_LOCATION_X
+        ;LDY CURRENT_PIECE_LOCATION_Y
+        ;JSR STORE_PIECE_COLOR
 
 .DRAW
         LDA #1
@@ -823,61 +808,127 @@ STORE_PIECE_COLOR
 !ZN RESTORE_PIECE_COLOR
 RESTORE_PIECE_COLOR
 
-        STX TEMPX       ; Save the x location
+; We need to convert the x,y position to two different offsets, we need the
+; offset in screen space and the offset in field space.
 
-; Multiply y location of the piece by the screen width (40)
-        STY FAC1
-        LDA #40
-        STA FAC2        ; A -> Offset hi
-        JSR MUL8        ; x -> Offset lo
-        
-; Store the y location offset in POINTER1
-        clc
-        STX POINTER1_LO       ; lo byte wont change when adding $D800
-        ADC #>FIELD_COLOR_DATA; because it is page aligned
-        STA POINTER1_HI       ; OFFSET_HI -> Y Offset in screen memory
+; First we store x,y so we can get it back.
+  stx TEMPX
+  sty TEMPY
+  
+; NEXT, convert y to a screen space offset by multiplying by 40
+  sty FAC1
+  lda #$28
+  sta FAC2
+  jsr MUL8
+  
+; We are going to store the screen space offset in POINTER1
+  stx POINTER1_LO
+  sta POINTER1_HI
+  
+; Add the x offset.
+  clc
+  txa
+  adc TEMPX
+  sta POINTER1_LO
+  bcc +
+  inc POINTER1_HI
++
+
+------------------------------------
+; NEXT convert x,y to field space and store it in pointer2
+
+; First, convert Y
+  lda TEMPY   
+  sec
+  sbc #$03  ; The field is offset by 3 so subtract that first
+  sta FAC1
+
+  lda #$0A
+  sta FAC2
+  jsr MUL8  ; multiply by 10, the width of the field
+  stx POINTER2_LO
+  sta POINTER2_HI
+  
+; convert x to field space
+  lda TEMPX
+  sec
+  sbc #$0d        ; Subtract 13 to move from screen space to field space.
+  sta TEMPX
+  
+; add x to y to get the final offset
+  clc 
+  lda POINTER2_LO
+  adc TEMPX
+  sta POINTER2_LO
+  bcc +
+  inc POINTER2_HI
++
+  
+; Add POINTER1 and COLOR_MEMORY to get the final screenspace offset
+  clc
+  lda POINTER1_LO
+  adc #<COLOR_MEMORY
+  sta POINTER1_LO
+  lda POINTER1_HI
+  adc #>COLOR_MEMORY
+  sta POINTER1_HI
+  
+; Add POINTER2 and FIELD_COLOR_DATA to get the final field offset
+  clc
+  lda POINTER2_LO
+  adc #<FIELD_COLOR_DATA
+  sta POINTER2_LO
+  lda POINTER2_HI
+  adc #>FIELD_COLOR_DATA
+  sta POINTER2_HI
         
 ; Replace the color behind the first piece part 
-; POINTER1_LO + GEN_PIECE_PTR[0] + X = COLOR_DATA_PTR[0]  
-        CLC                     ; Clear carry bit.
-        LDA TEMPX               ; Load x offset
-        LDY #$00
-        ADC (GEN_PIECE_PTR),Y   ; Subtract GEN_PIECE_PR[0]
-        JSR CVTY4010
-        TAY                     ; Set as index
-        LDA STORED_COLOR       ; Get the color in pos1 of the color data
-        STA (POINTER1_LO),Y     ; Set the color
+; POINTER1_LO + GEN_PIECE_PTR[0] + X = COLOR_DATA_PTR[0]
+  clc
+  ldy #$00
+  lda (GEN_PIECE_PTR),Y   ; Get the offset of the first part.
+  sta TEMPA               ; Save it for when we stor in screen space
+  JSR CVTY4010            ; Convert to field space
+  TAY                     ; Set as index
+  LDA (POINTER2),Y        ; Get the color in pos1 of the color data
+  ldy TEMPA               ; Reload the screen space off set
+  STA (POINTER1),Y        ; Set the color
 
 ; Replace the color behind the second piece part 
 ; POINTER1_LO + X - GEN_PIECE_PTR[1] = COLOR_DATA_PTR[1]          
-        LDA TEMPX               ; Load X offset
-        LDY #$01
-        ADC (GEN_PIECE_PTR),Y   ; Subtract GEN_PIECE_PR[0]
-        JSR CVTY4010
-        TAY                     ; Set as index
-        LDA STORED_COLOR+1      ; Get the color in pos1 of the color data
-        STA (POINTER1_LO),Y     ; Set the color
+  clc
+  ldy #$01
+  lda (GEN_PIECE_PTR),Y   ; Get the offset of the first part.
+  sta TEMPA               ; Save it for when we stor in screen space
+  JSR CVTY4010            ; Convert to field space
+  TAY                     ; Set as index
+  LDA (POINTER2),Y        ; Get the color in pos1 of the color data
+  ldy TEMPA               ; Reload the screen space off set
+  STA (POINTER1),Y        ; Set the color
 
 ; Replace the color behind the third piece part 
 ; POINTER1_LO + GEN_PIECE_PTR[2] + X = COLOR_DATA_PTR[2]
-        CLC
-        LDY #$02
-        LDA (GEN_PIECE_PTR),Y   ; get GEN_PIECE_PR[1]
-        ADC TEMPX               ; add X
-        JSR CVTY4010
-        TAY                     ; Set as index
-        LDA STORED_COLOR+2      ; get pos2 of color data
-        STA (POINTER1_LO),Y     ; Set color
+  clc
+  ldy #$02
+  lda (GEN_PIECE_PTR),Y   ; Get the offset of the first part.
+  sta TEMPA               ; Save it for when we stor in screen space
+  JSR CVTY4010            ; Convert to field space
+  TAY                     ; Set as index
+  LDA (POINTER2),Y        ; Get the color in pos1 of the color data
+  ldy TEMPA               ; Reload the screen space off set
+  STA (POINTER1),Y        ; Set the color
 
 ; Replace the color behind the fourth piece part 
 ; POINTER1_LO + GEN_PIECE_PTR[3] + X = COLOR_DATA_PTR[3]       
-        LDY #$03
-        LDA (GEN_PIECE_PTR),Y   ; get GEN_PIECE_PR[0]
-        ADC TEMPX               ; add X
-        JSR CVTY4010
-        TAY                     ; Set as index
-        LDA STORED_COLOR+3      ; Get pos3 of color data
-        STA (POINTER1_LO),Y     ; Set color
+  clc
+  ldy #$03
+  lda (GEN_PIECE_PTR),Y   ; Get the offset of the first part.
+  sta TEMPA               ; Save it for when we stor in screen space
+  JSR CVTY4010            ; Convert to field space
+  TAY                     ; Set as index
+  LDA (POINTER2),Y        ; Get the color in pos1 of the color data
+  ldy TEMPA               ; Reload the screen space off set
+  STA (POINTER1),Y        ; Set the color
         
         RTS
 

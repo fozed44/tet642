@@ -582,7 +582,7 @@ UPDATE_CURRENT_PIECE_PTR
         BEQ .END_UPDATE
         
         Jsr COPY_PIECE_TO_FIELD
-        jsr COPY_CURRENT_PIECE_COLOR_TO_COLOR_MEMORY
+        jsr COPY_PIECE_COLOR_TO_FIELD_COLOR_DATA
         
         
         CLC
@@ -614,12 +614,11 @@ UPDATE_CURRENT_PIECE_PTR
 !ZN UPDATE_PREV_PIECE_LOCATION
 UPDATE_PREV_PIECE_LOCATION
 
-        LDA CURRENT_PIECE_LOCATION_X
-        STA PREV_PIECE_LOCATION_X
-        LDA CURRENT_PIECE_LOCATION_Y
-        STA PREV_PIECE_LOCATION_Y
-
-        RTS
+  lda CURRENT_PIECE_LOCATION_X
+  sta PREV_PIECE_LOCATION_X
+  lda CURRENT_PIECE_LOCATION_Y
+  sta PREV_PIECE_LOCATION_Y
+  rts
 
 ;-----------------------------------------------------------------------.
 ;                                                 Update prev piece ptr |
@@ -629,12 +628,12 @@ UPDATE_PREV_PIECE_LOCATION
 !ZN UPDATE_PREV_PIECE_PTR
 UPDATE_PREV_PIECE_PTR
 
-        LDA CURRT_PIECE_PTR_LO
-        STA PREV_PIECE_PTR_LO
-        LDA CURRT_PIECE_PTR_HI
-        STA PREV_PIECE_PTR_HI
+  lda CURRT_PIECE_PTR_LO
+  sta PREV_PIECE_PTR_LO
+  lda CURRT_PIECE_PTR_HI
+  sta PREV_PIECE_PTR_HI
 
-        RTS
+  rts
         
 
 ;-----------------------------------------------------------------------.
@@ -736,68 +735,69 @@ DRAW_PIECE
 ; Y - Y location of the piece                                           |
 ;-----------------------------------------------------------------------'
 
-!ZN STORE_PIECE_COLOR
-STORE_PIECE_COLOR
-
-        STX TEMPX       ; Store X offset
-
-; Multiply y location of the piece by the screen width (40)
-        STY FAC1        ; Y is the multiplicand
-        LDA #10
-        STA FAC2        ; A -> Offset hi
-        JSR MUL8        ; x -> Offset lo
-        
-; Store the y location offset in POINTER1
-        clc
-        STX POINTER1_LO       ; lo byte wont change when adding FIELD_COLOR_DATA
-        ADC #>FIELD_COLOR_DATA; because it is page aligned
-        STA POINTER1_HI       ; OFFSET_HI -> Y Offset in screen memory
-        
-; Get the color behind the first piece part (pointer1[0],(X - GEN_PIECE_PTR[0]))
-        CLC
-        LDA TEMPX               ; Load X offset
-        LDY #$00
-        ADC (GEN_PIECE_PTR),Y   ; Subtract GEN_PIECE_PR[0]
-        JSR CVTY4010
-        TAY                     ; Set as index
-        LDA (POINTER1),Y        ; get color
-        STA STORED_COLOR        ; Store it in pos1 of color data
-
-; Get the color behind the second piece part (pointer1[0],(X - GEN_PIECE_PTR[1]))        
-        LDA TEMPX               ; Load X offset.
-        LDY #$01
-        ADC (GEN_PIECE_PTR),Y   ; subtract GEN_PIECE_PR[1]
-        JSR CVTY4010
-        TAY                     ; Set as index
-        LDA (POINTER1_LO),Y     ; get color
-        STA STORED_COLOR+1      ; Store it in pos1 of color data
-
-; Get the color behind the third piece (pointer1[0],(GEN_PIECE_PTR[2] + X))
-        CLC
-        LDY #$02
-        LDA (GEN_PIECE_PTR),Y   ; get GEN_PIECE_PR[2]
-        JSR CVTY4010
-        ADC TEMPX               ; add X
-        TAY                     ; Set as index
-        LDA (POINTER1_LO),Y     ; get color 
-        STA STORED_COLOR+2      ; Store it in pos2 of color data
-
-; Get the colore behind the fourth piece (pointer1[0],(GEN_PIECE_PTR[3] + X))
-        LDY #$03
-        LDA (GEN_PIECE_PTR),Y   ; get GEN_PIECE_PR[3]
-        JSR CVTY4010
-        ADC TEMPX               ; add X
-        TAY                     ; Set as index
-        LDA (POINTER1_LO),Y     ; get color
-        STA STORED_COLOR+3      ; Store it in pos3 of color data
-        
-        RTS
-        
+;!ZN STORE_PIECE_COLOR
+;STORE_PIECE_COLOR
+;
+;        STX TEMPX       ; Store X offset
+;
+;; Multiply y location of the piece by the screen width (40)
+;        STY FAC1        ; Y is the multiplicand
+;        LDA #10
+;        STA FAC2        ; A -> Offset hi
+;        JSR MUL8        ; x -> Offset lo
+;        
+;; Store the y location offset in POINTER1
+;        clc
+;        STX POINTER1_LO       ; lo byte wont change when adding FIELD_COLOR_DATA
+;        ADC #>FIELD_COLOR_DATA; because it is page aligned
+;        STA POINTER1_HI       ; OFFSET_HI -> Y Offset in screen memory
+;        
+;; Get the color behind the first piece part (pointer1[0],(X - GEN_PIECE_PTR[0]))
+;        CLC
+;        LDA TEMPX               ; Load X offset
+;        LDY #$00
+;        ADC (GEN_PIECE_PTR),Y   ; Subtract GEN_PIECE_PR[0]
+;        JSR CVTY4010
+;        TAY                     ; Set as index
+;        LDA (POINTER1),Y        ; get color
+;        STA STORED_COLOR        ; Store it in pos1 of color data
+;
+;; Get the color behind the second piece part (pointer1[0],(X - GEN_PIECE_PTR[1]))        
+;        LDA TEMPX               ; Load X offset.
+;        LDY #$01
+;        ADC (GEN_PIECE_PTR),Y   ; subtract GEN_PIECE_PR[1]
+;        JSR CVTY4010
+;        TAY                     ; Set as index
+;        LDA (POINTER1_LO),Y     ; get color
+;        STA STORED_COLOR+1      ; Store it in pos1 of color data
+;
+;; Get the color behind the third piece (pointer1[0],(GEN_PIECE_PTR[2] + X))
+;        CLC
+;        LDY #$02
+;        LDA (GEN_PIECE_PTR),Y   ; get GEN_PIECE_PR[2]
+;        JSR CVTY4010
+;        ADC TEMPX               ; add X
+;        TAY                     ; Set as index
+;        LDA (POINTER1_LO),Y     ; get color 
+;        STA STORED_COLOR+2      ; Store it in pos2 of color data
+;
+;; Get the colore behind the fourth piece (pointer1[0],(GEN_PIECE_PTR[3] + X))
+;        LDY #$03
+;        LDA (GEN_PIECE_PTR),Y   ; get GEN_PIECE_PR[3]
+;        JSR CVTY4010
+;        ADC TEMPX               ; add X
+;        TAY                     ; Set as index
+;        LDA (POINTER1_LO),Y     ; get color
+;        STA STORED_COLOR+3      ; Store it in pos3 of color data
+;        
+;        RTS
+;        
 ;-----------------------------------------------------------------------.
 ;                                                   Restore peice color |
 ;------------------------------------------------------------------------
-; Restores the color data behind a piece location that was collected    |
-; using the STORE_PIECE_COLOR routine                                   |
+; Restores the color data behind a piece location from the color data   |
+; in FIELD_COLOR_DATA, copying it to COLOR_MEMORY at the location       |
+; specified by the X,Y inputs.                                          |
 ;------------------------------------------------------------------------
 ; GEN_PIECE_PTR - points to the peice data structure used to replace    |
 ;               - the color data.                                       |
@@ -852,7 +852,7 @@ RESTORE_PIECE_COLOR
 ; convert x to field space
   lda TEMPX
   sec
-  sbc #$0d        ; Subtract 13 to move from screen space to field space.
+  sbc #$0D        ; Subtract 13 to move from screen space to field space.
   sta TEMPX
   
 ; add x to y to get the final offset
@@ -958,64 +958,82 @@ GEN_NEW_PIECE_COLOR
   rts
         
 ;-----------------------------------------------------------------------.
-;                      Copy the color of the current piece to color mem |
+;               Copy the color of the current piece to FIELD_COLOR_DATA |
 ;------------------------------------------------------------------------
-; Copy the color of the current piece to color memory.                  |
+; Copy the color of the current piece to color memory.(FILED_COLOR_DATA)|
 ; CURRENT_PIECE_PTR should hold the address of the piece shape to be    |
 ; used to store the color.                                              |
+; CURRENT_PIECE_LOCATION is used as the position of the piece.          |
+; CURRENT_PIECE_COLOR is used as the color to store.                    |
 ;-----------------------------------------------------------------------'
 
-!zn COPY_CURRENT_PIECE_COLOR_TO_COLOR_MEMORY
-COPY_CURRENT_PIECE_COLOR_TO_COLOR_MEMORY
+!ZN COPY_PIECE_COLOR_TO_FIELD_COLOR_DATA
+COPY_PIECE_COLOR_TO_FIELD_COLOR_DATA
 
-; Multiply CURRENT_PIECE_LOCATION_Y by 40 to get the Y offset in screen
-; space
+; Calculate the offset of the current piece from the start of the field
 
+  sec
+  
+  lda CURRENT_PIECE_LOCATION_X
+  sbc #FIELD_START_X-1
+  sta TEMPX
+  
   lda CURRENT_PIECE_LOCATION_Y
+  sec
+  sbc #FIELD_START_Y-1
+  
   sta FAC1
-  lda #$28
+  lda #FIELD_DATA_WIDTH
   sta FAC2
   jsr MUL8
-  
-  sta POINTER1_HI
-  
-; Add the x offset
-  clc
   txa
-  adc CURRENT_PIECE_LOCATION_X
+  clc
+  adc TEMPX
+  
+  adc #<FIELD_COLOR_DATA ;not needed, aligned
   sta POINTER1_LO
-  lda POINTER1_HI
-  adc #$d8
+  lda #>FIELD_COLOR_DATA
   sta POINTER1_HI
   
-; Get the relative offset of the first piece part
+  sec
+  lda POINTER1_LO
+  SBC #11
+  STA POINTER1_LO
+  LDA POINTER1_HI
+  SBC #00
+  STA POINTER1_HI
+  
+  clc
   ldy #$00
-  lda (CURRT_PIECE_PTR),y
+  lda (CURRT_PIECE_PTR),Y
+  jsr CVTY4010
   tay
   lda CURRENT_PIECE_COLOR
-  sta (POINTER1),y
-  tax                     ; Store CURRENT_PIECE_COLOR for fast access
+  sta (POINTER1),Y
   
-; Get the relative offset of the second piece part
+  clc
   ldy #$01
-  lda (CURRT_PIECE_PTR),y
+  lda (CURRT_PIECE_PTR),Y
+  jsr CVTY4010
   tay
-  txa
-  sta (POINTER1),y
+  lda CURRENT_PIECE_COLOR
+  sta (POINTER1),Y
   
-; Get the relative offset of the third piece part
+  clc
   ldy #$02
-  lda (CURRT_PIECE_PTR),y
+  lda (CURRT_PIECE_PTR),Y
+  jsr CVTY4010
   tay
-  txa
-  sta (POINTER1),y
+  lda CURRENT_PIECE_COLOR
+  sta (POINTER1),Y
   
-; Get the relative offset of the fourth piece part
+  clc
   ldy #$03
-  lda (CURRT_PIECE_PTR),y
+  lda (CURRT_PIECE_PTR),Y
+  jsr CVTY4010
   tay
-  txa
-  sta (POINTER1),y
+  lda CURRENT_PIECE_COLOR
+  sta (POINTER1),Y
   
   rts
   
@@ -1065,15 +1083,15 @@ COPY_PIECE_TO_FIELD
   clc
   ldy #$00
   lda (CURRT_PIECE_PTR),Y
-  
   jsr CVTY4010
-  
   tay
   lda #$01
   sta (POINTER1),Y
   
+  clc
+  ldy #$01
+  lda (CURRT_PIECE_PTR),Y
   jsr CVTY4010
-  
   tay
   lda #$01
   sta (POINTER1),Y
@@ -1081,13 +1099,14 @@ COPY_PIECE_TO_FIELD
   clc
   ldy #$02
   lda (CURRT_PIECE_PTR),Y
-  
   jsr CVTY4010
-  
   tay
   lda #$01
   sta (POINTER1),Y
   
+  clc
+  ldy #$03
+  lda (CURRT_PIECE_PTR),Y
   jsr CVTY4010
   tay
   lda #$01
@@ -1114,13 +1133,12 @@ DETECT_COLLISION
 ; Calculate the offset of the current piece from the start of the field
 
   sec
-  
   lda CURRENT_PIECE_LOCATION_X
   sbc #FIELD_START_X-1
   sta TEMPX
   
-  lda CURRENT_PIECE_LOCATION_Y
   sec
+  lda CURRENT_PIECE_LOCATION_Y
   sbc #FIELD_START_Y-1
   
   sta FAC1
@@ -1147,60 +1165,44 @@ DETECT_COLLISION
   clc
   ldy #$00
   lda (CURRT_PIECE_PTR),Y
-  
   jsr CVTY4010
-  
   tay
   lda (POINTER1),Y
-  
   beq +
   inc COLLISION_DETECTED
   rts
-+
   
-  clc
++ clc
   ldy #$01
   lda (CURRT_PIECE_PTR),Y
-  
   jsr CVTY4010
-  
   tay
   lda (POINTER1),Y
-  
   beq +
   inc COLLISION_DETECTED
   rts
-+
   
-  clc
++ clc
   ldy #$02
   lda (CURRT_PIECE_PTR),Y
-  
   jsr CVTY4010
-  
   tay
   lda (POINTER1),Y
-  
   beq +
   inc COLLISION_DETECTED
   rts
-+
   
-  clc
++ clc
   ldy #$03
   lda (CURRT_PIECE_PTR),Y
-  
   jsr CVTY4010
-  
   tay
   lda (POINTER1),Y
-  
   beq +
   inc COLLISION_DETECTED
   rts
-+
   
-  rts
++ rts
   
 ;-----------------------------------------------------------------------.
 ;                    Convert a fourty byte Y offset to a 10 by y offset |

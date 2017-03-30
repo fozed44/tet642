@@ -78,12 +78,18 @@ PIECE_DATA_BLOCK_WIDTH = PIECE_DATA_WIDTH * NUMBER_OF_PIECES
 
 ; The raster timer counts the number of raster syncs per frame. The higher
 ; this number, the slower the game will run.
-RASTER_TIMER_RESET = $0f
+RASTER_TIMER_RESET = $07
 
 ; When FIRE_LOCKOUT_TIMER is !0 FIRE_ACTIVE can never be set. 
 ; FIRE_LOCKOUT_TIMER_RESET determines how many raster resets after the
 ; button is pressed before it can be active again
 FIRE_LOCKOUT_TIMER_RESET = $0A
+
+; The PIECE_DROP_TIMER is used to count the raster timer resets between
+; forced drops of the piece. As the level goes up the timer is reset to
+; a lower and lower time. The reset values for each level are stored in
+; PIECE_DROP_TIMER_RESET_VECTOR
+PIECE_DROP_TIMER_RESET_VECTOR_LENGTH = 10
 
 ;-----------------------------------------------------------------------
 ;                                                                  MAIN
@@ -101,7 +107,7 @@ INIT
         JSR COPY_CUSTOM_CHARS
         JSR COPY_CUSTOM_SCREEN
         
-        LDA #$0a
+        LDA #$0b
         JSR SET_FIELD_COLOR_DATA
 
         LDA #<(PIECE_DATA+PIECE_DATA_WIDTH*6)
@@ -121,7 +127,7 @@ INIT
 
         LDA #$01
         STA COLOR
-        STA CURRENT_PIECE_COLOR
+        JSR GEN_NEW_PIECE_COLOR
         LDA #6
 
 - 
@@ -300,7 +306,7 @@ DRAW_FIELD
         RTS
 
 ;-----------------------------------------------------------------------
-;                                                       set field color
+;                                                  set field color data
 ;-----------------------------------------------------------------------
 ; A - Color used to fill the field
 ; Stores A in each byte for FIELD_COLOR_DATA
@@ -313,11 +319,10 @@ SET_FIELD_COLOR_DATA
   sty POINTER1_HI         ; pointer1
   
   ldy #199                ; Loop 199 chars
-        
+  
 - sta (POINTER1),y        ; Stor color byte
   dey                     
   bne -                   ; Copy from 199 - 1, break at 0
-  
   sta (POINTER1),y        ; Copy the last byte (index 0)
   rts                     ; exit
 
@@ -330,74 +335,83 @@ SET_FIELD_COLOR_DATA
 !ZN SET_FIELD_DATA
 SET_FIELD_DATA
 
-        LDY #<FIELD_DATA
-        STY POINTER1_LO
-        LDY #>FIELD_DATA        ; Get a pointer to the
-        STY POINTER1_HI         ; field data
+  ldy #<FIELD_DATA
+  sty POINTER1_LO
+  ldy #>FIELD_DATA        ; Get a pointer to the
+  sty POINTER1_HI         ; field data
 
-        LDY #199                ; Fill 200 characters
+  ldy #199                ; Fill 199 characters
 
-.FILL_LOOP
-        
-        STA (POINTER1),Y        ; Store A to field data
-        DEY                     ; dec y
-        CPY #$FF                ; Have we done 200?
-        BNE .FILL_LOOP          ; no? Draw another one.
+- sta (POINTER1),Y        ; Store A to field data
+  dey                     ; dec y
+  bne -                   ; Done? no? Draw another one.
+  sta (POINTER1),Y        ; Fill index 0.
 
-        RTS
-
-
+  rts
+  
+;----------------------------------------------------------------------.
+;                                              Set the joystick flags. |       
 ;-----------------------------------------------------------------------
-;                                                              JOY TEST        
-;-----------------------------------------------------------------------
-!ZN JOY_TEST
-JOY_TEST
+; Test joystick states. Sets the following flags if the corrisponding  |
+; joystick state is detected.                                          |
+;   - FIRE_ACTIVE                                                      |
+;   - JOY_LEFT                                                         |
+;   - JOY_RIGHT                                                        |
+;   - JOY_DOWN                                                         |
+;----------------------------------------------------------------------'
+!ZN SET_JOYSTICK_FLAGS
+SET_JOYSTICK_FLAGS
 
-  LDA #$00
-  STA FIRE_ACTIVE         ; Reset the fire active flag
+; Reset the joystick flags
+  lda #$00
+  sta FIRE_ACTIVE         ; Reset the fire active flag.
+  sta JOY_LEFT            ; Reset the JOY_LEFT flag.
+  sta JOY_RIGHT           ; Reset the JOY_RIGHT flag.
+  sta JOY_DOWN            ; Reset the JOY_DOWN flag.
+  sta JOY_UP
 
 .FIRE
-  LDA $DC01
-  BIT 5+BITS
-  BNE .ZERO_TIMER
-  LDA FIRE_LOCKOUT_TIMER
-  BEQ .ACTIVATE
-  DEC FIRE_LOCKOUT_TIMER
-  JMP .UP
+  lda $DC01
+  bit 5+BITS
+  bne .ZERO_TIMER
+  lda FIRE_LOCKOUT_TIMER
+  beq .ACTIVATE
+  dec FIRE_LOCKOUT_TIMER
+  jmp .UP
   
 .ACTIVATE
-  INC FIRE_ACTIVE
-  LDY #FIRE_LOCKOUT_TIMER_RESET
-  STY FIRE_LOCKOUT_TIMER
-  JMP .UP
+  inc FIRE_ACTIVE
+  ldy #FIRE_LOCKOUT_TIMER_RESET
+  sty FIRE_LOCKOUT_TIMER
+  jmp .UP
   
 .ZERO_TIMER
-  LDA #$00
-  STA FIRE_LOCKOUT_TIMER
+  lda #$00
+  sta FIRE_LOCKOUT_TIMER
 
 .UP
-        LDA $DC01
-        BIT 1+BITS
-        BNE .DOWN
-        DEC CURRENT_PIECE_LOCATION_Y      
+  lda $DC01
+  bit 1+BITS
+  bne .DOWN
+  inc JOY_UP      
 
 .DOWN
-        BIT 2+BITS
-        BNE .LEFT
-        INC CURRENT_PIECE_LOCATION_Y
+  bit 2+BITS
+  bne .LEFT
+  inc JOY_DOWN
 
 .LEFT
-        BIT 3+BITS
-        BNE .RIGHT
-        DEC CURRENT_PIECE_LOCATION_X
+  bit 3+BITS
+  bne .RIGHT
+  inc JOY_LEFT
 
 .RIGHT
-        BIT 4+BITS
-        BNE .JOY_EXIT
-        INC CURRENT_PIECE_LOCATION_X
+  bit 4+BITS
+  bne .JOY_EXIT
+  inc JOY_RIGHT
         
 .JOY_EXIT
-        RTS
+  rts
 
 
 ;-----------------------------------------------------------------------
@@ -482,10 +496,14 @@ CLIP_PIECE_LOCATION
 !ZN RUN_PIECE_STEP
 RUN_PIECE_STEP
         
-        JSR JOY_TEST
+        jsr RUN_DROP_LOGIC
+        JSR SET_JOYSTICK_FLAGS
         jsr UPDATE_CURRENT_PIECE_PTR
+        jsr UPDATE_CURRENT_PIECE_LOCATION
         JSR CLIP_PIECE_LOCATION
         
+        ldx CURRENT_PIECE_LOCATION_X
+        ldy CURRENT_PIECE_LOCATION_Y
         jsr DETECT_COLLISION
         ldx #$00
         lda COLLISION_DETECTED
@@ -530,6 +548,8 @@ RUN_PIECE_STEP
         LDA CURRT_PIECE_PTR_HI
         STA GEN_PIECE_PTR_HI
         
+        lda CURRENT_PIECE_COLOR
+        STA COLOR
         LDA #02
         LDX CURRENT_PIECE_LOCATION_X
         LDY CURRENT_PIECE_LOCATION_Y
@@ -541,45 +561,19 @@ RUN_PIECE_STEP
 
         RTS
 
-;-----------------------------------------------------------------------
-;                                                       Set moving flag
-;-----------------------------------------------------------------------
-
-; Set the moving flag if the current piece location is different from
-; the previous piece location, otherwise, the moving flag is cleared.
-!ZN SET_MOVING_FLAG
-SET_MOVING_FLAG
-        
-        LDA #$00
-        STA MOVING_FLAG
-        
-        LDA CURRENT_PIECE_LOCATION_X
-        CMP PREV_PIECE_LOCATION_X
-        BEQ .TEST_Y
-        INC MOVING_FLAG
-        RTS
-
-.TEST_Y
-        LDA CURRENT_PIECE_LOCATION_Y
-        CMP PREV_PIECE_LOCATION_Y
-        BEQ .TEST_DONE
-        INC MOVING_FLAG
-
-.TEST_DONE
-        RTS
-
-
 ;-----------------------------------------------------------------------.
-;                                              Update the current piece |
+;                                     Update the current piece rotation |
 ;------------------------------------------------------------------------
 ; Check FIRE_ACTIVE, if the flag is set, CURRT_PIECE_PTR is adjusted to |
-; point to the next rotation of the piece.                              |
+; point to the next rotation frame of the current piece.                |
 ;-----------------------------------------------------------------------'
 !ZN UPDATE_CURRENT_PIECE_PTR
 UPDATE_CURRENT_PIECE_PTR
 
         LDA FIRE_ACTIVE
         BEQ .END_UPDATE
+        
+        jsr GEN_NEW_PIECE_COLOR
         
         Jsr COPY_PIECE_TO_FIELD
         jsr COPY_PIECE_COLOR_TO_FIELD_COLOR_DATA
@@ -604,6 +598,49 @@ UPDATE_CURRENT_PIECE_PTR
 
 .END_UPDATE
         RTS
+        
+;-----------------------------------------------------------------------.
+;                                     Update the current piece location |
+;------------------------------------------------------------------------
+; Analize the state of the JOY_XXXX flags combined with collision       | 
+; using the DETECT_COLLISION routine to update the current location of  |
+; the piece.                                                            |
+;-----------------------------------------------------------------------'
+
+!zn UPDATE_CURRENT_PIECE_LOCATION
+UPDATE_CURRENT_PIECE_LOCATION
+
+  lda DROP_FLAG
+  beq +
+  jsr COLLIDE_DOWN
+  bne ++
+  inc CURRENT_PIECE_LOCATION_Y
+  jmp ++
+  
++ lda JOY_DOWN
+  beq ++
+  jsr COLLIDE_DOWN
+  bne ++
+  inc CURRENT_PIECE_LOCATION_Y
+  
+++lda JOY_UP
+  beq +
+  dec CURRENT_PIECE_LOCATION_Y
+  
++ lda JOY_LEFT
+  beq +
+  jsr COLLIDE_LEFT
+  bne +
+  dec CURRENT_PIECE_LOCATION_X
+  
++ lda JOY_RIGHT
+  beq +
+  jsr COLLIDE_RIGHT
+  bne +
+  inc CURRENT_PIECE_LOCATION_X
+  
++ rts
+
 
 ;-----------------------------------------------------------------------.
 ;                                            Update prev piece location |
@@ -723,75 +760,7 @@ DRAW_PIECE
 
         RTS
 
-;-----------------------------------------------------------------------.
-;                                                     Store peice color |
-;------------------------------------------------------------------------
-; Stores the color data behind a piece location before a piece is       |
-; placed there.                                                         |
-;------------------------------------------------------------------------
-; GEN_PIECE_PTR - points to the peice data structure used to gather     |
-;               - the color data.                                       |
-; X - X location of the piece                                           |
-; Y - Y location of the piece                                           |
-;-----------------------------------------------------------------------'
-
-;!ZN STORE_PIECE_COLOR
-;STORE_PIECE_COLOR
-;
-;        STX TEMPX       ; Store X offset
-;
-;; Multiply y location of the piece by the screen width (40)
-;        STY FAC1        ; Y is the multiplicand
-;        LDA #10
-;        STA FAC2        ; A -> Offset hi
-;        JSR MUL8        ; x -> Offset lo
-;        
-;; Store the y location offset in POINTER1
-;        clc
-;        STX POINTER1_LO       ; lo byte wont change when adding FIELD_COLOR_DATA
-;        ADC #>FIELD_COLOR_DATA; because it is page aligned
-;        STA POINTER1_HI       ; OFFSET_HI -> Y Offset in screen memory
-;        
-;; Get the color behind the first piece part (pointer1[0],(X - GEN_PIECE_PTR[0]))
-;        CLC
-;        LDA TEMPX               ; Load X offset
-;        LDY #$00
-;        ADC (GEN_PIECE_PTR),Y   ; Subtract GEN_PIECE_PR[0]
-;        JSR CVTY4010
-;        TAY                     ; Set as index
-;        LDA (POINTER1),Y        ; get color
-;        STA STORED_COLOR        ; Store it in pos1 of color data
-;
-;; Get the color behind the second piece part (pointer1[0],(X - GEN_PIECE_PTR[1]))        
-;        LDA TEMPX               ; Load X offset.
-;        LDY #$01
-;        ADC (GEN_PIECE_PTR),Y   ; subtract GEN_PIECE_PR[1]
-;        JSR CVTY4010
-;        TAY                     ; Set as index
-;        LDA (POINTER1_LO),Y     ; get color
-;        STA STORED_COLOR+1      ; Store it in pos1 of color data
-;
-;; Get the color behind the third piece (pointer1[0],(GEN_PIECE_PTR[2] + X))
-;        CLC
-;        LDY #$02
-;        LDA (GEN_PIECE_PTR),Y   ; get GEN_PIECE_PR[2]
-;        JSR CVTY4010
-;        ADC TEMPX               ; add X
-;        TAY                     ; Set as index
-;        LDA (POINTER1_LO),Y     ; get color 
-;        STA STORED_COLOR+2      ; Store it in pos2 of color data
-;
-;; Get the colore behind the fourth piece (pointer1[0],(GEN_PIECE_PTR[3] + X))
-;        LDY #$03
-;        LDA (GEN_PIECE_PTR),Y   ; get GEN_PIECE_PR[3]
-;        JSR CVTY4010
-;        ADC TEMPX               ; add X
-;        TAY                     ; Set as index
-;        LDA (POINTER1_LO),Y     ; get color
-;        STA STORED_COLOR+3      ; Store it in pos3 of color data
-;        
-;        RTS
-;        
+        
 ;-----------------------------------------------------------------------.
 ;                                                   Restore peice color |
 ;------------------------------------------------------------------------
@@ -800,7 +769,10 @@ DRAW_PIECE
 ; specified by the X,Y inputs.                                          |
 ;------------------------------------------------------------------------
 ; GEN_PIECE_PTR - points to the peice data structure used to replace    |
-;               - the color data.                                       |
+;               - the color data. The piece data structure is also      |
+;               - is also needed so that we can reference bytes 4-9     |
+;               - which are the offset bytes used when the peice is near|
+;               - The edge of the screen.
 ; X - X location of the piece                                           |
 ; Y - Y location of the piece                                           |
 ;-----------------------------------------------------------------------'
@@ -840,7 +812,12 @@ RESTORE_PIECE_COLOR
 ; First, convert Y
   lda TEMPY   
   sec
-  sbc #$03  ; The field is offset by 3 so subtract that first
+; The field is offset by 3 but because of the offset scheme, the
+; upper left hand corner can be 1 row above and one row to the 
+; left of the upper left corner of the field. We can't use negative
+; values so we need to subtract 2 and 12 instead of 3 and 13, and
+; then we have to adjust the field color data ptr to compensate.
+  sbc #$02  ; The field is offset by 2 so subtract that first
   sta FAC1
 
   lda #$0A
@@ -852,7 +829,12 @@ RESTORE_PIECE_COLOR
 ; convert x to field space
   lda TEMPX
   sec
-  sbc #$0D        ; Subtract 13 to move from screen space to field space.
+; The field is offset by 3 but because of the offset scheme, the
+; upper left hand corner can be 1 row above and one row to the 
+; left of the upper left corner of the field. We can't use negative
+; values so we need to subtract 2 and 12 instead of 3 and 13, and
+; then we have to adjust the field color data ptr to compensate.
+  sbc #$0c        ; Subtract 12 to move from screen space to field space.
   sta TEMPX
   
 ; add x to y to get the final offset
@@ -874,12 +856,17 @@ RESTORE_PIECE_COLOR
   sta POINTER1_HI
   
 ; Add POINTER2 and FIELD_COLOR_DATA to get the final field offset
+; The field is offset by 3 but because of the offset scheme, the
+; upper left hand corner can be 1 row above and one row to the 
+; left of the upper left corner of the field. We can't use negative
+; values so we need to subtract 2 and 12 instead of 3 and 13, and
+; then we have to adjust the field color data ptr to compensate.
   clc
   lda POINTER2_LO
-  adc #<FIELD_COLOR_DATA
+  adc #<FIELD_COLOR_DATA-11
   sta POINTER2_LO
   lda POINTER2_HI
-  adc #>FIELD_COLOR_DATA
+  adc #>FIELD_COLOR_DATA-1
   sta POINTER2_HI
         
 ; Replace the color behind the first piece part 
@@ -1119,8 +1106,11 @@ COPY_PIECE_TO_FIELD
 ;------------------------------------------------------------------------
 ; Detects a collision between the current piece (indicated by           |
 ; CURRT_PIECE_PTR). There is no indication of where the collision took  |
-; place. If a collision is detected, COLLISION_DETECTED is set to true, |
+; place.                                                                |
+; If a collision is detected, COLLISION_DETECTED is set to true,        |
 ; otherwise COLLISION_FLAG will be false.                               |
+; X - The x-position for which to test the piece.                       |
+; Y - The y-position for which to test the piece.                       |
 ;-----------------------------------------------------------------------'
 
 !ZN DETECT_COLLISION
@@ -1129,16 +1119,20 @@ DETECT_COLLISION
 ; Reset COLLISION_DETECTED
   lda #$00
   sta COLLISION_DETECTED
+  
+; Store the x,y location inputs
+  stx TEMPX
+  sty TEMPY
 
 ; Calculate the offset of the current piece from the start of the field
 
   sec
-  lda CURRENT_PIECE_LOCATION_X
+  lda TEMPX
   sbc #FIELD_START_X-1
   sta TEMPX
   
   sec
-  lda CURRENT_PIECE_LOCATION_Y
+  lda TEMPY
   sbc #FIELD_START_Y-1
   
   sta FAC1
@@ -1234,6 +1228,110 @@ CVTY4010
   
 ++ rts
 
+;-----------------------------------------------------------------------.
+;                                                   Increase drop speed |
+;------------------------------------------------------------------------
+; Pull the next byte in PIECE_DROP_TIMER_RESET_VECTOR. Check the positon|
+; in the vector to make sure that we don't pass the end of the vector   |
+; When the player reaches the end of the vector the pieces won't drop   |
+; any faster.                                                           |
+;------------------------------------------------------------------------
+
+!zn INCREASE_DROP_SPEED
+INCREASE_DROP_SPEED
+
+  lda PIECE_DROP_TIMER_RESET_VECTOR_POSITION
+  cmp #PIECE_DROP_TIMER_RESET_VECTOR_LENGTH-1
+  bne +
+  rts
++ inc PIECE_DROP_TIMER_RESET_VECTOR_POSITION
+  ldx PIECE_DROP_TIMER_RESET_VECTOR_POSITION
+  lda PIECE_DROP_TIMER_RESET_VECTOR,X
+  sta PIECE_DROP_TIMER_RESET
+  rts
+
+;-----------------------------------------------------------------------.
+;                                                            Drop piece |
+;------------------------------------------------------------------------
+; Run the logic that drops the piece.                                   |
+; - Lower the current value of the timer,                               |
+;     If the timer has not gone off return                              |
+;     Otherwise, reset the time and set the DROP_FLAG                   |
+;------------------------------------------------------------------------
+
+!zn RUN_DROP_LOGIC
+RUN_DROP_LOGIC
+
+  lda #$00
+  sta DROP_FLAG
+
+  dec PIECE_DROP_TIMER
+  beq +
+  rts
++ lda PIECE_DROP_TIMER_RESET
+  sta PIECE_DROP_TIMER
+  inc DROP_FLAG
+  rts
+  
+;-----------------------------------------------------------------------.
+;                                                          Collide Left |
+;------------------------------------------------------------------------
+; Determines if there would be a collision if the current piece were to |
+; move to the left.                                                     |
+; A - 1 if a collision is detected, 0 otherwise.                        |
+;-----------------------------------------------------------------------'
+!zn COLLIDE_LEFT
+COLLIDE_LEFT
+
+  lda CURRENT_PIECE_LOCATION_X
+  sec
+  sbc #$01
+  tax
+  ldy CURRENT_PIECE_LOCATION_Y
+  jsr DETECT_COLLISION
+  lda COLLISION_DETECTED
+  rts
+  
+
+;-----------------------------------------------------------------------.
+;                                                         Collide Right |
+;------------------------------------------------------------------------
+; Determines if there would be a collision if the current piece were to |
+; move to the right.                                                    |
+; A - 1 if a collision is detected, 0 otherwise.                        |
+;-----------------------------------------------------------------------'
+!zn COLLIDE_RIGHT
+COLLIDE_RIGHT
+
+  lda CURRENT_PIECE_LOCATION_X
+  clc
+  adc #$01
+  tax
+  ldy CURRENT_PIECE_LOCATION_Y
+  jsr DETECT_COLLISION
+  lda COLLISION_DETECTED
+  rts
+
+;-----------------------------------------------------------------------.
+;                                                          Collide Down |
+;------------------------------------------------------------------------
+; Determines if there would be a collision if the current piece were to |
+; move down.                                                            |
+; A - 1 if a collision is detected, 0 otherwise.                        |
+;-----------------------------------------------------------------------'
+
+!zn COLLIDE_DOWN
+COLLIDE_DOWN
+
+  lda CURRENT_PIECE_LOCATION_Y
+  clc
+  adc #$01
+  tay
+  ldx CURRENT_PIECE_LOCATION_X
+  jsr DETECT_COLLISION
+  lda COLLISION_DETECTED
+  rts
+  
 ;***********************************************************************
 ;                                                        CHARACTER DATA
 ;-----------------------------------------------------------------------
@@ -1335,21 +1433,40 @@ TEMP_LO
         !BYTE $00
 TEMP_HI
         !BYTE $00
-
-; Set in UPDATE_PIECE_LOCATION. 1 if the piece is moving this fram, else 0
-MOVING_FLAG
-        !BYTE $00
         
 ; Set or unset by DETECT_COLLISION. If true, the current piece/ piece location
 ; is colliding with the backgroun data located in FIELD_DATA.
 COLLISION_DETECTED
-  !BYTE $00
+        !BYTE $00
 
-; Cleared at the start of JOY_TEST, then set by JOY_TEST if the fire button
-; was pressed
+; Cleared at the start of SET_JOYSTICK_FLAGS, then set by SET_JOYSTICK_FLAGS 
+; if the corrisponding joystick state is present
 FIRE_ACTIVE        !BYTE $00
+JOY_LEFT           !BYTE $00
+JOY_RIGHT          !BYTE $00
+JOY_DOWN           !BYTE $00
+JOY_UP             !BYTE $00
+
+; Set by the RUN_DROP_LOGIC routine when the PIECE_DROP_TIMER runs out. 
+; Analyzed by the UPDATE_CURRENT_PIECE_LOCATION and forces the piece to move
+; down if the flag is set.
+DROP_FLAG          !BYTE $00
+
+; The FIRE_LOCKOOUT_TIMER is a debounce timer that prevents the piece from
+; rotating to quickly.
 FIRE_LOCKOUT_TIMER !BYTE $00
 
+; The number of raster resets before the piece drops.
+; The PIECE_DROP_TIMER is used to count the raster timer resets between
+; forced drops of the piece. As the level goes up the timer is reset to
+; a lower and lower time. The reset values for each level are stored in
+; PIECE_DROP_TIMER_RESET_VECTOR.
+; PIECE_DROP_TIMER_RESET_VECTOR_POSION is the current position in this
+; vector.
+PIECE_DROP_TIMER                       !BYTE 15
+PIECE_DROP_TIMER_RESET                 !BYTE 15
+PIECE_DROP_TIMER_RESET_VECTOR_POSITION !BYTE 0
+PIECE_DROP_TIMER_RESET_VECTOR          !BYTE 15, 18, 16, 14, 12,  10, 9, 8, 7, 5
 
 
 ;-----------------------------------------------------------------------

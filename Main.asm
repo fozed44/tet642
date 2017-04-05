@@ -1,5 +1,7 @@
 
 !SOURCE "common.asm"
+!SOURCE "state.asm"
+!SOURCE "Lines.asm"
 
 ;-----------------------------------------------------------------------
 ;                   C-64 - T-E-T-R-I-S - C-L-O-N-E
@@ -103,11 +105,14 @@ INIT
 
         JSR BASIC_OFF
         JSR INITIALIZE_SCREEN_MEMORY
-        ;JSR SET_EXTENDED_COLOR_MODE
         JSR COPY_CUSTOM_CHARS
         JSR COPY_CUSTOM_SCREEN
         
-        LDA #$0b
+        lda #$00
+        sta $d020
+        sta $d021
+        
+        LDA #$0B
         JSR SET_FIELD_COLOR_DATA
 
         LDA #<(PIECE_DATA+PIECE_DATA_WIDTH*6)
@@ -128,25 +133,12 @@ INIT
         LDA #$01
         STA COLOR
         JSR GEN_NEW_PIECE_COLOR
+        jsr GEN_NEW_PIECE_PTR
         LDA #6
 
 - 
-        JSR RUN_PIECE_STEP
+        JSR RUN_STEP
         JMP -
-        LDX #0
-        LDY #0
-        
-        JSR SET_SCREEN
-        
-.DONE
-        LDA TEMPA
-        CLC
-        ADC #1
-        JMP -
-        JSR WAIT_FOR_RASTER
-     ;   JSR SET_EXTENDED_COLOR_MODE
-     ;   JSR FUCK_SHIT_UP
-     ;   JSR WAIT_FOR_KEY
         RTS
 
 
@@ -491,75 +483,140 @@ CLIP_PIECE_LOCATION
         RTS
 
 ;-----------------------------------------------------------------------
-;                                                       Run piece step
+;                                                            Run a step
 ;-----------------------------------------------------------------------
-!ZN RUN_PIECE_STEP
-RUN_PIECE_STEP
+; Get the current state and then run a step depending on which state
+; we are in.
+!zn RUN_STEP
+RUN_STEP
+
+  jsr GET_STATE
+  cmp #STATE_NORMAL
+  bne +
+  
+; We are in the normal state.
+  jsr RUN_NORMAL_STATE_STEP
+  
+  lda BOTTOM_COLLISION_FLAG
+  beq +
+  jsr RUN_BOTTOM_COLLISION_LOGIC
+  jsr DETECT_COMPLETED_LINES
+  beq +
+  jsr REMOVE_LINES
+  
+
+  
++ rts
         
-        jsr RUN_DROP_LOGIC
-        JSR SET_JOYSTICK_FLAGS
-        jsr UPDATE_CURRENT_PIECE_PTR
-        jsr UPDATE_CURRENT_PIECE_LOCATION
-        JSR CLIP_PIECE_LOCATION
+;-----------------------------------------------------------------------
+;                                        Run a step in the normal state
+;-----------------------------------------------------------------------
+!ZN RUN_NORMAL_STATE_STEP
+RUN_NORMAL_STATE_STEP
         
-        ldx CURRENT_PIECE_LOCATION_X
-        ldy CURRENT_PIECE_LOCATION_Y
-        jsr DETECT_COLLISION
-        ldx #$00
-        lda COLLISION_DETECTED
-        beq +
-        ldx #$01
-+       stx $d021
+  jsr RUN_DROP_LOGIC
+  jsr SET_JOYSTICK_FLAGS
+  jsr UPDATE_PIECE
+  
+  jsr DRAW_FIELD
 
-        LDA PREV_PIECE_PTR_LO
-        LDY PREV_PIECE_PTR_HI
-        STA GEN_PIECE_PTR_LO
-        STY GEN_PIECE_PTR_HI
-        
-        ;LDX CURRENT_PIECE_LOCATION_X
-        ;LDY CURRENT_PIECE_LOCATION_Y
-        ;JSR STORE_PIECE_COLOR
+  ldx #RASTER_TIMER_RESET
+- JSR WAIT_FOR_RASTER        
+  DEX
+  BNE -
 
-.DRAW
-        LDA #1
-        STA $D020
-        JSR DRAW_FIELD
-        LDA #0
-        STA $D020
-        ldx #14
+  lda PREV_PIECE_PTR_LO
+  ldy PREV_PIECE_PTR_HI
+  sta GEN_PIECE_PTR_LO
+  sty GEN_PIECE_PTR_HI
+  ldx PREV_PIECE_LOCATION_X
+  ldy PREV_PIECE_LOCATION_Y
+  jsr RESTORE_PIECE_COLOR  
 
-        LDX #RASTER_TIMER_RESET
+  lda CURRT_PIECE_PTR_LO
+  sta GEN_PIECE_PTR_LO
+  lda CURRT_PIECE_PTR_HI
+  sta GEN_PIECE_PTR_HI
+  
+  lda CURRENT_PIECE_COLOR
+  sta COLOR
+  lda #02
+  ldx CURRENT_PIECE_LOCATION_X
+  ldy CURRENT_PIECE_LOCATION_Y
+  jsr DRAW_PIECE
+  
+  jsr FLIP_SCREEN_BUFFERS     
+  jsr UPDATE_PREV_PIECE_LOCATION
+  jsr UPDATE_PREV_PIECE_PTR
+  
+  rts
 
--       JSR WAIT_FOR_RASTER        
-        DEX
-        BNE -
+;-----------------------------------------------------------------------.
+;                                              Update the current piece |
+;------------------------------------------------------------------------
+ |
+;-----------------------------------------------------------------------'
+!zn UPDATE_PIECE
+UPDATE_PIECE
 
-        ;LDA MOVING_FLAG
-        ;BEQ .NO_COLOR_RESTORE
+; Store a copy of the current piece pointer. If there is a collision propblem
+; we may have to undo a rotation.
+  lda CURRT_PIECE_PTR_LO
+  sta POINTER3_LO
+  lda CURRT_PIECE_PTR_HI
+  sta POINTER3_HI
+  
+; Store the x,y location for the same reason.
+  lda CURRENT_PIECE_LOCATION_X
+  sta TMPX
+  lda CURRENT_PIECE_LOCATION_Y
+  sta TMPY
+  
 
-        LDX PREV_PIECE_LOCATION_X
-        LDY PREV_PIECE_LOCATION_Y
-        JSR RESTORE_PIECE_COLOR
-        
-.NO_COLOR_RESTORE        
+; UPDATE_CURRENT_PIECE_PTR will set CURRT_PIECE_PTR to point to the the piece
+; data that we should be using this frame, if the fire button is pressed, it
+; will point to the next animation frame.
+  jsr UPDATE_CURRENT_PIECE_PTR
+  
+; Move the piece to the next location
+  jsr GET_NEXT_PIECE_LOCATION
+  jsr CLIP_PIECE_LOCATION
+  
+; If the piece was rotated (it was rotated by UPDATE_CURRENT_PIECE_PTR if the
+; fire button is active) we need to see if the rotation caused
+  lda FIRE_ACTIVE
+  beq .NO_ROTATION  ; If FIRE_ACTIVE is 0, there was no rotation
+  
+  ldx CURRENT_PIECE_LOCATION_X
+  ldy CURRENT_PIECE_LOCATION_Y
+  jsr DETECT_COLLISION
+  lda COLLISION_DETECTED
+  beq .NO_COLLISION
+  
+; If the rotation caused a rotation, meaning the rotation caused the piece to
+; actually overlap an old piece in the field, undo the rotation and the change
+; in location.
+  lda POINTER3_LO
+  sta CURRT_PIECE_PTR_LO
+  lda POINTER3_HI
+  sta CURRT_PIECE_PTR_HI
+  
+  lda TMPX
+  sta CURRENT_PIECE_LOCATION_X
+  lda TMPY
+  sta CURRENT_PIECE_LOCATION_Y
+  
+; Move to the next location without allowing the rotation.
+  lda #$00
+  sta FIRE_ACTIVE
+  jsr GET_NEXT_PIECE_LOCATION
+  jsr CLIP_PIECE_LOCATION
+  
+.NO_COLLISION
+.NO_ROTATION
+  rts
+  
 
-        LDA CURRT_PIECE_PTR_LO
-        STA GEN_PIECE_PTR_LO
-        LDA CURRT_PIECE_PTR_HI
-        STA GEN_PIECE_PTR_HI
-        
-        lda CURRENT_PIECE_COLOR
-        STA COLOR
-        LDA #02
-        LDX CURRENT_PIECE_LOCATION_X
-        LDY CURRENT_PIECE_LOCATION_Y
-        JSR DRAW_PIECE
-        
-        JSR FLIP_SCREEN_BUFFERS     
-        JSR UPDATE_PREV_PIECE_LOCATION
-        JSR UPDATE_PREV_PIECE_PTR
-
-        RTS
 
 ;-----------------------------------------------------------------------.
 ;                                     Update the current piece rotation |
@@ -570,64 +627,79 @@ RUN_PIECE_STEP
 !ZN UPDATE_CURRENT_PIECE_PTR
 UPDATE_CURRENT_PIECE_PTR
 
-        LDA FIRE_ACTIVE
-        BEQ .END_UPDATE
-        
-        jsr GEN_NEW_PIECE_COLOR
-        
-        Jsr COPY_PIECE_TO_FIELD
-        jsr COPY_PIECE_COLOR_TO_FIELD_COLOR_DATA
-        
-        
-        CLC
-        LDA CURRT_PIECE_PTR_LO
-        ADC #(NUMBER_OF_PIECES*PIECE_DATA_WIDTH)               ; ADD 49 BYTES (7 pieces * 7 bytes/piece)
-        BCS .RESET
-        CLC
-        CMP #<PIECE_DATA_END
-        BCS .RESET
-        STA CURRT_PIECE_PTR_LO
-        JMP .END_UPDATE
+  lda FIRE_ACTIVE
+  beq +
+; The fire button is active, so set CURRT_PIECE_PTR to point to the next
+; animation frame.
+  jsr ADVANCE_ROTATION_FRAME
++ rts
+   
+;-----------------------------------------------------------------------.
+;                                                advance rotation frame |
+;------------------------------------------------------------------------
+; Analyze the piece currently pointed to by CURRT_PIECE_PTR the frame   |
+; is advanced, NEXT_PIECE_PTR will then point to the next from,         |
+; CURRT_PIECE_PTR is not toched.                                        |
+;-----------------------------------------------------------------------'
+!zn ADVANCE_ROTATION_FRAME
+ADVANCE_ROTATION_FRAME
+
+  clc
+  lda CURRT_PIECE_PTR_LO
+  adc #(NUMBER_OF_PIECES*PIECE_DATA_WIDTH)               ; ADD 49 BYTES (7 pieces * 7 bytes/piece)
+  bcs .RESET
+  clc
+  cmp #<PIECE_DATA_END
+  bcs .RESET
+  sta CURRT_PIECE_PTR_LO
+  jmp .END_UPDATE
         
 .RESET
-        SEC
-        LDA CURRT_PIECE_PTR_LO
-        SBC #(PIECE_DATA_BLOCK_WIDTH*3) ;($93)
-        STA CURRT_PIECE_PTR_LO
-
-
+  sec
+  lda CURRT_PIECE_PTR_LO
+  sbc #(PIECE_DATA_BLOCK_WIDTH*3) ;($93)
+  sta CURRT_PIECE_PTR_LO
+  
 .END_UPDATE
-        RTS
+  rts
         
 ;-----------------------------------------------------------------------.
-;                                     Update the current piece location |
+;                                     Calculate the next piece location |
 ;------------------------------------------------------------------------
 ; Analize the state of the JOY_XXXX flags combined with collision       | 
-; using the DETECT_COLLISION routine to update the current location of  |
-; the piece.                                                            |
+; using the DETECT_COLLISION routine to calculation the next location   |
+; of the piece.                                                         |
+; If the piece is to move down, either because the DROP_FLAG is set or  |
+; because the JOY_DOWN state is active, AND a collision is detected in  |
+; the down direction, the the BOTTOM_COLLISION_FLAG is activated and    |
+; routine exits.                                                        |
 ;-----------------------------------------------------------------------'
 
-!zn UPDATE_CURRENT_PIECE_LOCATION
-UPDATE_CURRENT_PIECE_LOCATION
+!zn GET_NEXT_PIECE_LOCATION
+GET_NEXT_PIECE_LOCATION
+
+; Clear the bottom collision flag
+  lda #$00
+  sta BOTTOM_COLLISION_FLAG
 
   lda DROP_FLAG
   beq +
   jsr COLLIDE_DOWN
-  bne ++
+  bne .setBottomCollisionFlag
+  jsr CHECK_BOTTOM_CLIP
+  bne .setBottomCollisionFlag
   inc CURRENT_PIECE_LOCATION_Y
   jmp ++
   
 + lda JOY_DOWN
   beq ++
   jsr COLLIDE_DOWN
-  bne ++
+  bne .setBottomCollisionFlag
+  jsr CHECK_BOTTOM_CLIP
+  bne .setBottomCollisionFlag
   inc CURRENT_PIECE_LOCATION_Y
   
-++lda JOY_UP
-  beq +
-  dec CURRENT_PIECE_LOCATION_Y
-  
-+ lda JOY_LEFT
+++lda JOY_LEFT
   beq +
   jsr COLLIDE_LEFT
   bne +
@@ -641,6 +713,9 @@ UPDATE_CURRENT_PIECE_LOCATION
   
 + rts
 
+.setBottomCollisionFlag
+  inc BOTTOM_COLLISION_FLAG
+  rts
 
 ;-----------------------------------------------------------------------.
 ;                                            Update prev piece location |
@@ -757,9 +832,7 @@ DRAW_PIECE
         LDA COLOR
         STA (POINTER3_LO),Y
 
-
         RTS
-
         
 ;-----------------------------------------------------------------------.
 ;                                                   Restore peice color |
@@ -943,6 +1016,43 @@ GEN_NEW_PIECE_COLOR
   
   sta CURRENT_PIECE_COLOR
   rts
+
+;-----------------------------------------------------------------------.
+;                              Generate a pointer to a new random piece |  
+;------------------------------------------------------------------------
+; There are 7 piece types, so we need a random number from 0 to 6, then |
+; use the number in the following formula to get a pointer to a new     |
+; piece:                                                                |
+; PIECE_DATA + PIECE_DATA_WIDTH * RND                                   |
+; Store the new pointer in CURRENT_PIECE_PTR                            |
+;-----------------------------------------------------------------------'
+
+!zn GEN_NEW_PIECE_PTR
+GEN_NEW_PIECE_PTR
+
+; Get a random number from 0 to 6.
+  lda #$07                ; Set the maximum output of RND
+  ldx #$07                ; Set the RND mask
+  jsr RND                 ; Call RND to get the random number
+  
+  sta FAC1
+  lda #PIECE_DATA_WIDTH
+  sta FAC2                
+  jsr MUL8                ; Multiply the random number by PIECE_DATA_WIDTH
+  
+  tay                     ; Store the hi byte of the result in Y
+  txa                     ; Move the lo byte of the result to A
+  clc
+  
+; Add RND * PIECE_DATA_WIDTH to PIECE_DATA
+  adc #<PIECE_DATA
+  sta CURRT_PIECE_PTR_LO
+  tya
+  adc #>PIECE_DATA
+  sta CURRT_PIECE_PTR_HI
+  
+  rts
+ 
         
 ;-----------------------------------------------------------------------.
 ;               Copy the color of the current piece to FIELD_COLOR_DATA |
@@ -1332,6 +1442,65 @@ COLLIDE_DOWN
   lda COLLISION_DETECTED
   rts
   
+;-----------------------------------------------------------------------
+;                                                      Check bottm clip
+;-----------------------------------------------------------------------
+; Check to see if the current piece can move down one row without causing
+; the piece to clip the bottom of the field
+; The routine uses CURRENT_PIECE_LOCATION and CURRENT_PIECE_PTR.
+; A - 0 if the piece can move down without clipping the bottom of the field
+;     1 if the piece would clip.
+
+!ZN CHECK_BOTTOM_CLIP
+CHECK_BOTTOM_CLIP
+
+  lda CURRENT_PIECE_LOCATION_Y
+  clc
+  adc #$01
+  sta TEMPY
+
+  lda #FIELD_END_Y                    ; Get field bottom
+  ldy #$07
+  clc
+  adc (CURRT_PIECE_PTR),Y             ; Subtract piece h-1
+  
+  cmp TEMPY
+  bcs ++
+  lda #$01
+  jmp +
+++lda #$00
+
++ rts
+
+  
+;-----------------------------------------------------------------------.
+;                                    Execute the bottom collision logic |
+;------------------------------------------------------------------------
+; When a bottom collision is detected, copy the current piece at its    |
+; current location to the field data. Then select a new piece and a new |
+; color and reset the x,y position                                      |
+;-----------------------------------------------------------------------'
+
+!zn RUN_BOTTOM_COLLISION_LOGIC
+RUN_BOTTOM_COLLISION_LOGIC
+
+; Copy the current piece to the field.
+  jsr COPY_PIECE_TO_FIELD
+  jsr COPY_PIECE_COLOR_TO_FIELD_COLOR_DATA
+  
+; Generate a new piece.
+  jsr GEN_NEW_PIECE_COLOR
+  jsr GEN_NEW_PIECE_PTR
+  
+; Reset the loction of the current piece
+  lda #$03
+  sta CURRENT_PIECE_LOCATION_Y
+  lda #$0D
+  sta CURRENT_PIECE_LOCATION_X
+  
+  rts
+        
+  
 ;***********************************************************************
 ;                                                        CHARACTER DATA
 ;-----------------------------------------------------------------------
@@ -1428,11 +1597,6 @@ CURRENT_PIECE_COLOR
 ; Used to pass character codes to sub routines.
 CHARACTER_CODE
         !BYTE $00
-
-TEMP_LO
-        !BYTE $00
-TEMP_HI
-        !BYTE $00
         
 ; Set or unset by DETECT_COLLISION. If true, the current piece/ piece location
 ; is colliding with the backgroun data located in FIELD_DATA.
@@ -1452,6 +1616,11 @@ JOY_UP             !BYTE $00
 ; down if the flag is set.
 DROP_FLAG          !BYTE $00
 
+; The BOTTOM_COLLISION_FLAG is set but the UPDATE_CURRENT_PIECE_LOCATION the
+; either the DROP_FLAG is set or the JOY_DOWN state is active and a collision
+; is detected in the down direction.
+BOTTOM_COLLISION_FLAG !BYTE $00
+
 ; The FIRE_LOCKOOUT_TIMER is a debounce timer that prevents the piece from
 ; rotating to quickly.
 FIRE_LOCKOUT_TIMER !BYTE $00
@@ -1467,6 +1636,9 @@ PIECE_DROP_TIMER                       !BYTE 15
 PIECE_DROP_TIMER_RESET                 !BYTE 15
 PIECE_DROP_TIMER_RESET_VECTOR_POSITION !BYTE 0
 PIECE_DROP_TIMER_RESET_VECTOR          !BYTE 15, 18, 16, 14, 12,  10, 9, 8, 7, 5
+
+TMPX !BYTE $00
+TMPY !BYTE $00
 
 
 ;-----------------------------------------------------------------------
